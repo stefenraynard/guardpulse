@@ -2,9 +2,8 @@
 #include <WiFi.h>
 #include <FirebaseESP32.h>
 #include "oled.h"
-#include "max30102.h"
-#include "mpu6050.h"
-
+#include "max30102_agent.h"
+#include "bmi160_agent.h"
 
 // Provide the token generation process info
 #include "addons/TokenHelper.h"
@@ -15,8 +14,8 @@
 #define I2C_SCL 9
 
 // WiFi credentials
-#define WIFI_SSID "CEIOT"
-#define WIFI_PASSWORD "CE-1OT@!"
+#define WIFI_SSID "E948"
+#define WIFI_PASSWORD "123456789"
 
 // Firebase credentials (from Firebase Console → Project Settings)
 #define API_KEY "AIzaSyCfV1SKtW8JPujExcmQbfmMZktto_yBJP4"
@@ -29,7 +28,7 @@ FirebaseConfig config;
 OledDisplay oled;
 
 Max30102Agent hrSensor;
-Mpu6050Agent fallSensor;
+Bmi160Agent fallSensor;
 
 bool firebaseReady = false;
 unsigned long sendDataPrevMillis = 0;
@@ -37,20 +36,25 @@ unsigned long sendDataPrevMillis = 0;
 void setupWiFi() {
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     Serial.print("Connecting to WiFi");
-    while (WiFi.status() != WL_CONNECTED) {
+    unsigned long startMs = millis();
+    while (WiFi.status() != WL_CONNECTED && (millis() - startMs < 5000)) {
         Serial.print(".");
         delay(300);
     }
     Serial.println();
-    Serial.print("Connected with IP: ");
-    Serial.println(WiFi.localIP());
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.print("Connected with IP: ");
+        Serial.println(WiFi.localIP());
+    } else {
+        Serial.println("WiFi connection failed (timeout).");
+    }
 }
 
 void setupFirebase() {
     config.api_key = API_KEY;
     config.database_url = DATABASE_URL;
 
-    // Anonymous sign-in (or use email/password)
+    // Anonymous sign-in
     if (Firebase.signUp(&config, &auth, "", "")) {
         Serial.println("Firebase sign-up OK");
         firebaseReady = true;
@@ -65,73 +69,90 @@ void setupFirebase() {
 
 void setup() {
     Serial.begin(115200);
-    while (!Serial) { delay(3000); }
+    unsigned long serialStart = millis();
+    while (!Serial && (millis() - serialStart < 3000)) {
+        delay(10);
+    }
 
     Wire.begin(I2C_SDA, I2C_SCL);
     Wire.setClock(100000);
-     if (oled.begin(&Wire)) {
+    
+    if (oled.begin(&Wire)) {
         Serial.println("OLED initialized.");
     } else {
         Serial.println("OLED initialization failed.");
     }    
 
-    // Force MAX30102 to 100kHz to match the bus and prevent the library from resetting it to 400kHz
+    // Initialize MAX30102
     if (hrSensor.begin(Wire, 100000)) {
         Serial.println("MAX30102 initialized.");
     } else {
         Serial.println("MAX30102 initialization failed.");
     }
 
-    if (fallSensor.begin(&Wire)) {
-        Serial.println("MPU6050 initialized.");
+    // Try BMI160 at address 0x68. If that fails, try address 0x69.
+    bool bmiSuccess = fallSensor.begin(&Wire, 0x68);
+    if (!bmiSuccess) {
+        bmiSuccess = fallSensor.begin(&Wire, 0x69);
+    }
+    if (bmiSuccess) {
+        Serial.println("BMI160 initialized.");
     } else {
-        Serial.println("MPU6050 initialization failed.");
+        Serial.println("BMI160 initialization failed.");
     }
 
     setupWiFi();
-    setupFirebase();
+    if (WiFi.status() == WL_CONNECTED) {
+        setupFirebase();
+    }
 }
 
 void loop() {
-    // Continuously poll HR sensor
-    float bpm = hrSensor.getBPM();
-    float spo2 = hrSensor.getSpO2();
+    // Continuously read/poll MAX30102 raw values
+    uint32_t rawIr = 0, rawRed = 0;
+    hrSensor.readRaw(rawIr, rawRed);
 
+    // Read BMI160 filtered and raw data
     GyroData_t gyroData;
     fallSensor.readData(&gyroData);
 
-    // Send data to Firebase every 2 seconds
-    if (firebaseReady && Firebase.ready() && (millis() - sendDataPrevMillis > 2000)) {
+    // Upload data asynchronously to Firebase every 2 seconds
+    if (millis() - sendDataPrevMillis > 2000) {
         sendDataPrevMillis = millis();
 
-        long irValue = hrSensor.getLastIR();
+        float bpm = hrSensor.getBPM();
+        float spo2 = hrSensor.getSpO2();
 
-    //     // Package all data into a single JSON object to avoid blocking the main loop
-        FirebaseJson json;
-        json.set("bpm", bpm);
-        json.set("spo2", spo2);
-        // json.set("fall_detected", gyroData.isFall);
-        json.set("fall_detected", gyroData.isFall);
-        json.set("timestamp", (int)millis());
-        
-        // Use setJSONAsync directly on Firebase and pass objects by reference
-        if (Firebase.setJSONAsync(fbdo, "/health_band", json)) {
-            Serial.printf("[Firebase] Async Sent - BPM: %.2f, SpO2: %.2f, Fall: %d\n", bpm, spo2, gyroData.isFall);
-        } else {
-            Serial.printf("[Firebase Error] %s\n", fbdo.errorReason().c_str());
+        // Print debug log
+        Serial.printf("[DEBUG] BPM: %.2f, SpO2: %.2f, Fall: %d, Accel: %.2fg, Gyro: %.2f | Raw IR: %u, Raw Red: %u, BufLen: %d\n",
+                      bpm, spo2, gyroData.isFall, gyroData.accel_g, gyroData.gyroX_dps, rawIr, rawRed, hrSensor.getBufferLength());
+
+        if (firebaseReady && Firebase.ready()) {
+            FirebaseJson json;
+            json.set("bpm", bpm);
+            json.set("spo2", spo2);
+            json.set("fall_detected", gyroData.isFall);
+            json.set("timestamp", (int)millis());
+            
+            if (Firebase.setJSONAsync(fbdo, "/health_band", json)) {
+                Serial.println("[Firebase] Async upload started.");
+            } else {
+                Serial.printf("[Firebase Error] %s\n", fbdo.errorReason().c_str());
+            }
         }
+    }
 
-        // Print Gyro stats for debugging
-        Serial.printf("[GYRO DEBUG] Accel: %.2fg | Gyro X: %.2f, Y: %.2f, Z: %.2f | Fall: %d\n", gyroData.accel, gyroData.gyroX, gyroData.gyroY, gyroData.gyroZ, gyroData.isFall);
-
+    // Update OLED: if fall detected, show emergency screen; else if no finger (IR < 20000), show "Place finger on sensor..."; else, show vitals (BPM, SpO2)
+    static unsigned long lastOledMillis = 0;
+    if (millis() - lastOledMillis > 500) {
+        lastOledMillis = millis();
         if (gyroData.isFall) {
-          Serial.println("!!! FALL DETECTED !!!");
-          oled.showEmergency();
-       }  else if (irValue < 50000) {
-            Serial.println("  -> No finger detected.");
+            oled.showEmergency();
+        } else if (rawIr < 20000) {
             oled.showMessage("Place finger\non sensor...");
         } else {
-            // Update OLED with vitals
+            float bpm = hrSensor.getBPM();
+            float spo2 = hrSensor.getSpO2();
             oled.showVitals(bpm, spo2);
         }
     }
