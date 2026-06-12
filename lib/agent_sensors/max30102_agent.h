@@ -34,6 +34,12 @@ private:
     int fingerAbsentSamples;
     float lastSpo2;
     int32_t lastBpm;
+
+    // Filter states
+    float dc_ir;
+    float dc_red;
+    float ac_ir_fil;
+    float ac_red_fil;
 };
 
 #endif // AGENT_SENSORS_MAX30102_AGENT_H

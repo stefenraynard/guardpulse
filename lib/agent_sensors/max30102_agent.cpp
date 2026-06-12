@@ -4,7 +4,8 @@
 
 Max30102Agent::Max30102Agent()
     : lastIrValue(0), lastRedValue(0), bufferLength(0),
-      newSamplesCount(0), fingerAbsentSamples(0), lastSpo2(-1.0f), lastBpm(-1) {
+      newSamplesCount(0), fingerAbsentSamples(0), lastSpo2(-1.0f), lastBpm(-1),
+      dc_ir(0.0f), dc_red(0.0f), ac_ir_fil(0.0f), ac_red_fil(0.0f) {
     memset(irBuffer, 0, sizeof(irBuffer));
     memset(redBuffer, 0, sizeof(redBuffer));
 }
@@ -56,12 +57,12 @@ bool Max30102Agent::begin(TwoWire &wirePort, uint32_t i2cSpeed) {
     // 6. Mode Configuration (SpO2 mode)
     if (!maxim_max30102_write_reg(0x09, 0x03)) { Serial.println("[MAX30102] FAIL: mode config"); return false; }
     
-    // 7. SpO2 Configuration (ADC range 8192nA, 100Hz sample rate, 411us pulse width)
-    if (!maxim_max30102_write_reg(0x0A, 0x47)) { Serial.println("[MAX30102] FAIL: spo2 config"); return false; }
+    // 7. SpO2 Configuration (ADC range 16384nA, 100Hz sample rate, 411us pulse width)
+    if (!maxim_max30102_write_reg(0x0A, 0x67)) { Serial.println("[MAX30102] FAIL: spo2 config"); return false; }
     
-    // 8. LED current (Red and IR set to 0x50, ~16mA)
-    if (!maxim_max30102_write_reg(0x0C, 0x50)) { Serial.println("[MAX30102] FAIL: LED1 PA"); return false; }
-    if (!maxim_max30102_write_reg(0x0D, 0x50)) { Serial.println("[MAX30102] FAIL: LED2 PA"); return false; }
+    // 8. LED current (Red set to 0x5F (~19mA) to reduce skin reflection, IR set to 0xAF (~35mA) for deep penetration)
+    if (!maxim_max30102_write_reg(0x0C, 0x5F)) { Serial.println("[MAX30102] FAIL: LED1 PA"); return false; }
+    if (!maxim_max30102_write_reg(0x0D, 0xAF)) { Serial.println("[MAX30102] FAIL: LED2 PA"); return false; }
     
     // 9. Pilot PA
     if (!maxim_max30102_write_reg(0x10, 0x7F)) { Serial.println("[MAX30102] FAIL: pilot PA"); return false; }
@@ -126,20 +127,37 @@ bool Max30102Agent::readRaw(uint32_t &ir, uint32_t &red) {
             lastIrValue = tempIr;
             lastRedValue = tempRed;
             
-            if (tempIr > 7000) {
+            if (tempIr > 15000) {
                 fingerAbsentSamples = 0;
+                
+                if (dc_ir == 0.0f) {
+                    dc_ir = (float)tempIr;
+                }
+                if (dc_red == 0.0f) {
+                    dc_red = (float)tempRed;
+                }
+                
+                dc_ir = 0.95f * dc_ir + 0.05f * tempIr;
+                dc_red = 0.95f * dc_red + 0.05f * tempRed;
+                
+                float raw_ac_ir = (float)tempIr - dc_ir;
+                float raw_ac_red = (float)tempRed - dc_red;
+                
+                ac_ir_fil = 0.5f * ac_ir_fil + 0.5f * raw_ac_ir;
+                ac_red_fil = 0.5f * ac_red_fil + 0.5f * raw_ac_red;
+                
                 // No decimation: 100Hz sensor / 4 avg = 25Hz FIFO output = FS=25 expected by RF algorithm
                 if (bufferLength < 100) {
-                    irBuffer[bufferLength] = tempIr;
-                    redBuffer[bufferLength] = tempRed;
+                    irBuffer[bufferLength] = (uint32_t)(ac_ir_fil + 100000.0f);
+                    redBuffer[bufferLength] = (uint32_t)(ac_red_fil + 100000.0f);
                     bufferLength++;
                 } else {
                     for (int j = 1; j < 100; j++) {
                         irBuffer[j - 1] = irBuffer[j];
                         redBuffer[j - 1] = redBuffer[j];
                     }
-                    irBuffer[99] = tempIr;
-                    redBuffer[99] = tempRed;
+                    irBuffer[99] = (uint32_t)(ac_ir_fil + 100000.0f);
+                    redBuffer[99] = (uint32_t)(ac_red_fil + 100000.0f);
                 }
                 
                 newSamplesCount++;
@@ -152,17 +170,38 @@ bool Max30102Agent::readRaw(uint32_t &ir, uint32_t &red) {
                     float ratio = 0.0f;
                     float correl = 0.0f;
                     
-                    rf_heart_rate_and_oxygen_saturation(irBuffer, 100, redBuffer, &n_spo2, &ch_spo2_valid, &n_heart_rate, &ch_hr_valid, &ratio, &correl);
+                    uint32_t cleanIrBuffer[100];
+                    uint32_t cleanRedBuffer[100];
+                    for (int i = 0; i < 100; i++) {
+                        cleanIrBuffer[i] = (uint32_t)((int32_t)irBuffer[i] - 100000 + (int32_t)dc_ir);
+                        cleanRedBuffer[i] = (uint32_t)((int32_t)redBuffer[i] - 100000 + (int32_t)dc_red);
+                    }
+                    
+                    rf_heart_rate_and_oxygen_saturation(cleanIrBuffer, 100, cleanRedBuffer, &n_spo2, &ch_spo2_valid, &n_heart_rate, &ch_hr_valid, &ratio, &correl);
                     
                     Serial.printf("[RF debug] Correlation: %.3f (min: 0.8), Ratio: %.3f, Raw HR: %d (valid: %d), Raw SpO2: %.2f (valid: %d)\n",
                                   correl, ratio, n_heart_rate, ch_hr_valid, n_spo2, ch_spo2_valid);
                     
-                    if (ch_spo2_valid && ch_hr_valid) {
-                        lastBpm = n_heart_rate;
-                        lastSpo2 = n_spo2;
+                    if (ch_hr_valid) {
+                        if (lastBpm == -1) {
+                            lastBpm = n_heart_rate;
+                        } else {
+                            lastBpm = (int32_t)(0.8f * (float)lastBpm + 0.2f * (float)n_heart_rate);
+                        }
+                    }
+                    if (ch_spo2_valid) {
+                        if (lastSpo2 == -1.0f) {
+                            lastSpo2 = n_spo2;
+                        } else {
+                            lastSpo2 = 0.8f * lastSpo2 + 0.2f * n_spo2;
+                        }
                     }
                 }
             } else {
+                dc_ir = 0.0f;
+                dc_red = 0.0f;
+                ac_ir_fil = 0.0f;
+                ac_red_fil = 0.0f;
                 fingerAbsentSamples++;
                 if (fingerAbsentSamples > 75) { // 3 seconds at 25 Hz
                     bufferLength = 0;
@@ -191,7 +230,7 @@ int Max30102Agent::getBufferLength() {
 }
 
 float Max30102Agent::getBPM() {
-    if (lastIrValue >= 7000) {
+    if (lastIrValue >= 15000) {
         return (float)lastBpm;
     } else {
         return -1.0f;
@@ -199,7 +238,7 @@ float Max30102Agent::getBPM() {
 }
 
 float Max30102Agent::getSpO2() {
-    if (lastIrValue >= 7000) {
+    if (lastIrValue >= 15000) {
         return lastSpo2;
     } else {
         return -1.0f;

@@ -116,8 +116,8 @@ void loop() {
     GyroData_t gyroData;
     fallSensor.readData(&gyroData);
 
-    // Upload data asynchronously to Firebase every 2 seconds
-    if (millis() - sendDataPrevMillis > 2000) {
+    // Upload data asynchronously to Firebase every 10 seconds
+    if (millis() - sendDataPrevMillis > 10000) {
         sendDataPrevMillis = millis();
 
         float bpm = hrSensor.getBPM();

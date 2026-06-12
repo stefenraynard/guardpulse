@@ -4,9 +4,9 @@
 TwoWire* Bmi160Agent::_wire = nullptr;
 
 Bmi160Agent::Bmi160Agent()
-    : kfAx(0.001f, 0.03f, 1.0f, 0.0f),
-      kfAy(0.001f, 0.03f, 1.0f, 0.0f),
-      kfAz(0.001f, 0.03f, 1.0f, 1.0f),
+    : kfAx(0.1f, 0.03f, 1.0f, 0.0f),
+      kfAy(0.1f, 0.03f, 1.0f, 0.0f),
+      kfAz(0.1f, 0.03f, 1.0f, 1.0f),
       kfGx(0.01f, 0.1f, 1.0f, 0.0f),
       kfGy(0.01f, 0.1f, 1.0f, 0.0f),
       kfGz(0.01f, 0.1f, 1.0f, 0.0f),
