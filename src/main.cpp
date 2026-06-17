@@ -171,6 +171,22 @@ void setup() {
 }
 
 void loop() {
+    // Self-healing I2C recovery check every 1 second
+    static unsigned long lastI2CCheck = 0;
+    if (millis() - lastI2CCheck > 1000) {
+        lastI2CCheck = millis();
+        Wire.beginTransmission(0x57);
+        if (Wire.endTransmission() != 0) {
+            Serial.println("[I2C] Bus/Sensor lock detected. Recovering and re-initializing...");
+            Wire.begin(I2C_SDA, I2C_SCL);
+            hrSensor.begin(Wire, 100000);
+            bool bmiSuccess = fallSensor.begin(&Wire, 0x68);
+            if (!bmiSuccess) {
+                fallSensor.begin(&Wire, 0x69);
+            }
+        }
+    }
+
     // Continuously read/poll MAX30102 raw values
     uint32_t rawIr = 0, rawRed = 0;
     hrSensor.readRaw(rawIr, rawRed);
