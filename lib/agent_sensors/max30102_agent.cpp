@@ -88,6 +88,7 @@ bool Max30102Agent::readRaw(uint32_t &ir, uint32_t &red) {
     bool wrOk = maxim_max30102_read_reg(0x04, &wrPtr);
     bool rdOk = maxim_max30102_read_reg(0x06, &rdPtr);
 
+    /*
     // Print FIFO pointer values every 2 seconds for diagnosis
     static unsigned long lastPtrLog = 0;
     if (millis() - lastPtrLog > 2000) {
@@ -100,6 +101,7 @@ bool Max30102Agent::readRaw(uint32_t &ir, uint32_t &red) {
         Serial.printf("[MAX30102 DIAG] wrPtr=%d rdPtr=%d ovf=%d intr1=0x%02X mode=0x%02X wrOk=%d rdOk=%d\n",
                       wrPtr, rdPtr, ovf, intr1, modeReg, wrOk, rdOk);
     }
+    */
 
     if (!wrOk || !rdOk) {
         Serial.println("[MAX30102] ERROR: Failed to read FIFO pointers");
@@ -161,7 +163,7 @@ bool Max30102Agent::readRaw(uint32_t &ir, uint32_t &red) {
                 }
                 
                 newSamplesCount++;
-                if (bufferLength == 100 && newSamplesCount >= 25) {
+                if (bufferLength == 100 && newSamplesCount >= 10) {
                     newSamplesCount = 0;
                     float n_spo2 = -1.0f;
                     int8_t ch_spo2_valid = 0;

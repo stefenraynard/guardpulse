@@ -10,12 +10,12 @@
 // Provide the RTDB payload printing info
 #include "addons/RTDBHelper.h"
 
-#define I2C_SDA 8
+#define I2C_SDA 8   
 #define I2C_SCL 9
 
 // WiFi credentials
-#define WIFI_SSID ":)"
-#define WIFI_PASSWORD "1223334444"
+#define WIFI_SSID "CEIOT"
+#define WIFI_PASSWORD "CE-1OT@!"
 
 // Firebase credentials (from Firebase Console → Project Settings)
 #define API_KEY "AIzaSyCfV1SKtW8JPujExcmQbfmMZktto_yBJP4"
@@ -179,8 +179,8 @@ void loop() {
     GyroData_t gyroData;
     fallSensor.readData(&gyroData);
 
-    // Upload data asynchronously to Firebase every 10 seconds
-    if (millis() - sendDataPrevMillis > 10000) {
+    // Upload data asynchronously to Firebase every 1.5 seconds
+    if (millis() - sendDataPrevMillis > 1500) {
         sendDataPrevMillis = millis();
 
         checkDeviceStatus();
