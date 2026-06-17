@@ -42,7 +42,7 @@ void setupWiFi() {
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     Serial.print("Connecting to WiFi");
     unsigned long startMs = millis();
-    while (WiFi.status() != WL_CONNECTED && (millis() - startMs < 5000)) {
+    while (WiFi.status() != WL_CONNECTED && (millis() - startMs < 15000)) {
         Serial.print(".");
         delay(300);
     }
