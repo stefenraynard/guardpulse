@@ -82,23 +82,35 @@ void checkDeviceStatus() {
         String val = fbdo.stringData();
         String dataType = fbdo.dataType();
         
-        if (dataType == "null" || val.length() == 0) {
+        if (dataType == "null" || val.length() == 0 || val == "null") {
             ownerUID = "";
-            Serial.println("[Firebase] Registering device...");
+            if (dataType == "null" || val.length() == 0) {
+                Serial.println("[Firebase] Registering device...");
+                if (Firebase.setString(fbdo, ownerPath, "null") && 
+                    Firebase.setString(fbdo, "/devices/" + deviceUID + "/pairingCode", pairingCode)) {
+                    Serial.println("[Firebase] Device registered successfully.");
+                } else {
+                    Serial.printf("[Firebase Error] Registration failed: %s\n", fbdo.errorReason().c_str());
+                }
+            }
+        } else {
+            ownerUID = val;
+        }
+    } else {
+        String err = fbdo.errorReason();
+        if (err.indexOf("path not exist") != -1 || err.indexOf("not found") != -1 || fbdo.httpCode() == 404) {
+            ownerUID = "";
+            Serial.println("[Firebase] Path not found. Registering device...");
             if (Firebase.setString(fbdo, ownerPath, "null") && 
                 Firebase.setString(fbdo, "/devices/" + deviceUID + "/pairingCode", pairingCode)) {
                 Serial.println("[Firebase] Device registered successfully.");
             } else {
                 Serial.printf("[Firebase Error] Registration failed: %s\n", fbdo.errorReason().c_str());
             }
-        } else if (val == "null") {
-            ownerUID = "";
         } else {
-            ownerUID = val;
+            Serial.printf("[Firebase Error] checkDeviceStatus failed: %s\n", err.c_str());
+            ownerUID = "";
         }
-    } else {
-        Serial.printf("[Firebase Error] checkDeviceStatus getString failed: %s\n", fbdo.errorReason().c_str());
-        ownerUID = "";
     }
 }
 
